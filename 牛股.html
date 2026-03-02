@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 增加视口适配，适配不同设备 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>牛股计算器</title>
+<!-- 替换为更稳定的CDN地址，确保本地能加载 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.4/dist/index.css">
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.31/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.8.4/dist/index.full.min.js"></script>
+<style>
+body { 
+  background-color: #f0f2f5; 
+  margin: 0; 
+  padding: 12px; 
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; 
+  height: 100vh; 
+  box-sizing: border-box; 
+  overflow: hidden; 
+}
+#app { 
+  height: 100%; 
+  display: flex; 
+  flex-direction: column; 
+}
+.app-container { 
+  flex: 1; 
+  display: flex; 
+  flex-direction: column; 
+  background: #fff; 
+  padding: 20px; 
+  border-radius: 8px; 
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
+  overflow: hidden; 
+}
+.header-box { 
+  flex-shrink: 0; 
+  margin-bottom: 20px; 
+  border-bottom: 1px solid #ebeef5; 
+  padding-bottom: 10px; 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  flex-wrap: wrap; /* 适配小屏幕 */
+  gap: 10px;
+}
+.header-box h2 { 
+  margin: 0; 
+  color: #409EFF; 
+  font-size: 22px; 
+}
+.toolbar { 
+  flex-shrink: 0; 
+  margin-bottom: 15px; 
+  display: flex; 
+  gap: 12px; 
+  align-items: flex-start; 
+  flex-wrap: wrap; /* 适配小屏幕 */
+}
+
+/* 状态样式 */
+.status-hold { color: #909399; font-weight: bold; }
+.status-loss { color: #f56c6c; font-weight: bold; background: #fef0f0; padding: 2px 6px; border-radius: 4px; border: 1px solid #fbc4c4; }
+.status-profit { color: #409EFF; font-weight: bold; background: #ecf5ff; padding: 2px 6px; border-radius: 4px; border: 1px solid #b3d8ff; }
+
+/* 原有行高亮 */
+.el-table .warning-row td.el-table__cell { background-color: #fffaf3 !important; }
+.el-table .danger-row td.el-table__cell { background-color: #fff9e6 !important; }
+
+.red-text { color: #f56c6c; font-weight: bold; }
+.green-text { color: #67c23a; font-weight: bold; }
+.fib-val { font-family: 'Monaco', 'Consolas', monospace; font-size: 13px; font-weight: bold; color: #606266; }
+.price-now { font-weight: 800; font-size: 15px; color: #303133; }
+.market-tag { font-size: 10px; padding: 0 4px; border-radius: 3px; margin-right: 4px; }
+.tag-sh { background: #fee; color: #f56c6c; border: 1px solid #fcc; }
+.tag-sz { background: #eef5ff; color: #409eff; border: 1px solid #c6e2ff; }
+.tag-hk { background: #f0f9eb; color: #67c23a; border: 1px solid #c2e7b0; }
+
+/* 适配小屏幕 */
+@media (max-width: 768px) {
+  .toolbar {
+    flex-direction: column;
+  }
+  .el-button {
+    width: 100% !important;
+    height: 40px !important;
+  }
+  .el-input {
+    width: 100% !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="app-container">
+    <div class="header-box">
+      <div>
+        <h2>牛股策略计算器</h2>
+        <p>💡 逻辑：橘色(跌破0.618) | 金色(跌破0.786黄金坑)</p>
+        <p>止损：跌破成本7% | 止盈：盈利超20%后从最高点回撤利润的30%触发</p>
+      </div>
+      <div>
+        <el-button-group>
+          <el-button type="primary" @click="refreshAllPrices" :loading="loading">刷新行情</el-button>
+          <el-button type="danger" @click="clearAll">清空列表</el-button>
+        </el-button-group>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <el-input v-model="inputCodes" type="textarea" :rows="2" placeholder="代码示例：300308,588170,9992" style="flex: 1;"></el-input>
+      <el-button type="primary" @click="addNewCodes" :loading="loading" style="height: 52px; width: 120px;">查询并追加</el-button>
+    </div>
+
+    <el-table :data="tableData" border height="100%" :row-class-name="tableRowClassName">
+      <!-- 基本信息 -->
+      <el-table-column label="名称/代码" min-width="140" fixed="left">
+        <template #default="scope">
+          <div style="font-weight: bold;">
+            <span :class="['market-tag', 'tag-' + getMarket(scope.row.fullCode)]">{{getMarket(scope.row.fullCode).toUpperCase()}}</span>
+            {{scope.row.name}}
+          </div>
+          <div style="font-size: 11px; color: #909399;">{{scope.row.fullCode}}</div>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="最新价" width="90">
+        <template #default="scope"><span class="price-now">{{scope.row.now}}</span></template>
+      </el-table-column>
+      <el-table-column label="E3·高点" width="130">
+        <template #default="scope">
+          <el-input v-model="scope.row.high" :precision="2" :controls="false" size="small" style="width: 100%" @input="calculateRow(scope.row)"></el-input>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="D3·低点" width="130">
+        <template #default="scope">
+          <el-input v-model="scope.row.low" :precision="2" :controls="false" size="small" style="width: 100%" @input="calculateRow(scope.row)"></el-input>
+        </template>
+      </el-table-column>
+      <!-- 裴波那契参考 -->
+      <el-table-column label="常规买点" width="85">
+        <template #default="scope"><span class="fib-val">{{scope.row.f382}}</span></template>
+      </el-table-column>
+      <el-table-column label="618强撑" width="85">
+        <template #default="scope"><span class="fib-val">{{scope.row.f618}}</span></template>
+      </el-table-column>
+      <el-table-column label="黄金坑" width="85">
+        <template #default="scope"><span class="fib-val">{{scope.row.f786}}</span></template>
+      </el-table-column>
+      <!-- 策略输入区 -->
+      <el-table-column label="成本价" width="110">
+        <template #default="scope">
+          <el-input v-model="scope.row.cost" :precision="3" :controls="false" size="small" style="width: 100%" @input="calculateRow(scope.row)"></el-input>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="短期最高" width="110">
+        <template #default="scope">
+          <el-input v-model="scope.row.stHigh" :precision="3" :controls="false" size="small" style="width: 100%" @input="calculateRow(scope.row)"></el-input>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="止盈/止损" width="100" align="center">
+        <template #default="scope">
+          <span v-if="scope.row.cost">
+            <span v-if="scope.row.signal === '止损'" class="status-loss">止损</span>
+            <span v-else-if="scope.row.signal === '止盈'" class="status-profit">止盈</span>
+            <span v-else class="status-hold">持有</span>
+          </span>
+          <span v-else class="status-hold">-</span>
+        </template>
+      </el-table-column>
+
+      <!-- 日内参考 -->
+      <el-table-column label="分时均价" width="130">
+        <template #default="scope">
+          <el-input-number v-model="scope.row.avg" :precision="3" :controls="false" size="small" class="avg-input" style="width: 100%" @input="calculateRow(scope.row)"></el-input-number>
+        </template>
+      </el-table-column>
+      <el-table-column label="🔴 日内压力" min-width="100">
+        <template #default="scope"><span class="red-text">{{scope.row.topLine}}</span></template>
+      </el-table-column>
+
+      <el-table-column label="🟢 日内支撑" min-width="100">
+        <template #default="scope"><span class="green-text">{{scope.row.bottomLine}}</span></template>
+      </el-table-column>
+
+      <el-table-column label="操作" width="80" fixed="right">
+        <template #default="scope">
+          <el-button type="danger" size="small" link @click="removeItem(scope.$index)">删</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+  </div>
+</div>
+
+<script>
+// 确保Vue和Element Plus加载完成
+if (typeof Vue === 'undefined' || typeof ElementPlus === 'undefined') {
+  alert('Vue或Element Plus加载失败，请检查网络连接！');
+}
+
+const { createApp, ref, onMounted, reactive } = Vue;
+
+createApp({
+  setup() {
+    const STORAGE_KEY = 'phi_batch_table_v5';
+    const inputCodes = ref("");
+    const tableData = ref([]);
+    const loading = ref(false);
+
+    const tableRowClassName = ({ row }) => {
+      // 增加空值判断，避免本地运行时NaN导致的错误
+      const now = parseFloat(row.now) || 0;
+      const f786 = parseFloat(row.f786) || 0;
+      const f618 = parseFloat(row.f618) || 0;
+      if (now <= f786 && f786 > 0) return 'danger-row';
+      if (now <= f618 && f618 > 0) return 'warning-row';
+      return '';
+    };
+
+    const getMarket = (fullCode) => {
+      if (!fullCode) return 'other';
+      fullCode = fullCode.toLowerCase();
+      if (fullCode.startsWith('sh')) return 'sh';
+      if (fullCode.startsWith('sz')) return 'sz';
+      if (fullCode.startsWith('hk')) return 'hk';
+      if (fullCode.startsWith('bj')) return 'bj';
+      return 'other';
+    };
+
+    onMounted(() => {
+      // 本地加载缓存数据
+      const cached = localStorage.getItem(STORAGE_KEY);
+      if (cached) {
+        try {
+          tableData.value = JSON.parse(cached).map(item => reactive(item));
+          // 本地刷新行情（避免首次加载卡顿）
+          setTimeout(() => {
+            refreshAllPrices();
+          }, 500);
+        } catch (e) {
+          console.error('加载缓存数据失败：', e);
+          localStorage.removeItem(STORAGE_KEY); // 清除损坏的缓存
+        }
+      }
+    });
+
+    const saveToLocal = () => {
+      // 本地存储数据，增加异常捕获
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tableData.value));
+      } catch (e) {
+        console.error('保存数据到本地失败：', e);
+        alert('本地存储已满，无法保存数据！');
+      }
+    };
+
+    const formatCode = (code) => {
+      if (!code) return null;
+      code = code.trim().toLowerCase();
+      if (/^(sh|sz|hk|bj)/.test(code)) return code;
+      if (/^\d+$/.test(code)) {
+        if (code.length <= 4 || (code.length === 5 && code.startsWith('0'))) return 'hk' + code.padStart(5, '0');
+        if (code.length === 6) {
+          if (/^(5[168]|6)/.test(code)) return 'sh' + code;
+          if (/^(1[568]|0|3)/.test(code)) return 'sz' + code;
+          if (/^(4|8)/.test(code)) return 'bj' + code;
+        }
+      }
+      return code;
+    };
+
+    const fetchData = (codes, isAddition = true) => {
+      if (codes.length === 0) return;
+      loading.value = true;
+      const queryStr = codes.join(',');
+
+      // 清除旧的JSONP脚本，避免冲突
+      const oldScript = document.getElementById('jsonp-stock');
+      if (oldScript) oldScript.remove();
+
+      // 创建JSONP脚本，适配本地访问
+      const script = document.createElement('script');
+      script.id = 'jsonp-stock';
+      // 增加超时处理，避免本地加载卡住
+      script.timeout = 10000;
+      script.src = `https://qt.gtimg.cn/q=${queryStr}`;
+      document.body.appendChild(script);
+
+      // 超时处理
+      const timeoutTimer = setTimeout(() => {
+        loading.value = false;
+        alert('行情接口请求超时，请检查网络或稍后重试！');
+        script.remove();
+      }, 10000);
+
+      script.onload = () => {
+        clearTimeout(timeoutTimer); // 清除超时定时器
+        codes.forEach(code => {
+          const dataStr = window[`v_${code}`];
+          if (dataStr) {
+            const d = dataStr.split('~');
+            const nowPrice = parseFloat(d[3]) || 0;
+            const dayHigh = parseFloat(d[33]) || nowPrice;
+            const dayLow = parseFloat(d[34]) || nowPrice;
+
+            let turnover = parseFloat(d[37]) || 0;
+            let volume = parseFloat(d[36]) || 0;
+            let newAvg = 0;
+            if (code.startsWith('hk')) {
+              newAvg = volume > 0 ? turnover / volume : nowPrice;
+            } else {
+              newAvg = volume > 0 ? (turnover * 10000) / (volume * 100) : nowPrice;
+            }
+            newAvg = parseFloat(newAvg.toFixed(3));
+
+            const existingIndex = tableData.value.findIndex(item => item.fullCode === code);
+
+            if (existingIndex > -1) {
+              const item = tableData.value[existingIndex];
+              item.now = nowPrice;
+              // 自动更新最高点：如果当前价超过了之前记录的最高点
+              if (nowPrice > (item.stHigh || 0)) {
+                item.stHigh = nowPrice;
+              }
+              // 初始化加载时，如果item没均价，则赋值
+              if (!item.avg) item.avg = newAvg;
+              calculateRow(item);
+            } else if (isAddition) {
+              const newItem = reactive({
+                name: d[1] || '未知名称',
+                fullCode: code,
+                now: nowPrice,
+                cost: 0, // 初始成本
+                stHigh: dayHigh || nowPrice, // 初始最高价
+                high: dayHigh || nowPrice, // E3高点
+                low: dayLow || nowPrice, // D3低点
+                avg: newAvg,
+                signal: '',
+                f382: 0, f618: 0, f786: 0,
+                topLine: 0, bottomLine: 0
+              });
+              calculateRow(newItem);
+              tableData.value.unshift(newItem);
+            }
+          } else {
+            alert(`代码 ${code} 未查询到行情数据，请检查代码是否正确！`);
+          }
+        });
+        loading.value = false;
+        saveToLocal();
+        if (isAddition) inputCodes.value = "";
+      };
+
+      // 脚本加载失败处理
+      script.onerror = () => {
+        clearTimeout(timeoutTimer);
+        loading.value = false;
+        alert('行情接口加载失败，请检查网络或稍后重试！');
+        script.remove();
+      };
+    };
+
+    const calculateRow = (row) => {
+      // 增加空值判断，避免NaN计算
+      const now = parseFloat(row.now) || 0;
+      const cost = parseFloat(row.cost) || 0;
+      const stHigh = parseFloat(row.stHigh) || 0;
+      const high = parseFloat(row.high) || 0;
+      const low = parseFloat(row.low) || 0;
+      const avg = parseFloat(row.avg) || 0;
+
+      // 1. 裴波那契计算
+      const diff = high - low;
+      row.f382 = (high - diff * 0.382).toFixed(3);
+      row.f618 = (high - diff * 0.618).toFixed(3);
+      row.f786 = (high - diff * 0.786).toFixed(3);
+
+      // 2. 日内均价线
+      const K = 0.98848;
+      if (avg > 0) {
+        row.topLine = (avg / K).toFixed(3);
+        row.bottomLine = (avg * K).toFixed(3);
+      } else {
+        row.topLine = 0;
+        row.bottomLine = 0;
+      }
+
+      // 3. 止盈止损逻辑
+      row.signal = '';
+      if (cost > 0 && now > 0) {
+        // 止损逻辑：浮亏7%
+        if (now < cost * 0.93) {
+          row.signal = '止损';
+        }
+        // 止盈逻辑：利润回撤30% 且 最高盈利曾超过20%
+        else if (stHigh >= cost * 1.20) {
+          const profitLimit = stHigh - (stHigh - cost) * 0.3;
+          if (now <= profitLimit) {
+            row.signal = '止盈';
+          }
+        }
+      }
+      saveToLocal();
+    };
+
+    const addNewCodes = () => {
+      const codes = inputCodes.value.split(/[,\s\n]/).map(c => formatCode(c)).filter(c => c);
+      if(codes.length > 0) {
+        fetchData(codes, true);
+      } else {
+        alert('请输入有效的股票代码！');
+      }
+    };
+
+    const refreshAllPrices = () => {
+      const currentCodes = tableData.value.map(item => item.fullCode).filter(c => c);
+      if (currentCodes.length > 0) {
+        fetchData(currentCodes, false);
+      } else {
+        alert('暂无股票数据可刷新！');
+      }
+    };
+
+    const removeItem = (index) => {
+      tableData.value.splice(index, 1);
+      saveToLocal();
+    };
+
+    const clearAll = () => {
+      ElementPlus.ElMessageBox.confirm('确定清空所有股票数据吗？', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        tableData.value = [];
+        saveToLocal();
+        ElementPlus.ElMessage({
+          type: 'success',
+          message: '已清空所有数据！'
+        });
+      }).catch(() => {
+        ElementPlus.ElMessage({
+          type: 'info',
+          message: '已取消清空操作！'
+        });
+      });
+    };
+
+    return {
+      inputCodes, tableData, loading,
+      addNewCodes, refreshAllPrices, calculateRow, removeItem, clearAll,
+      tableRowClassName, getMarket
+    };
+  }
+}).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>
